@@ -1,0 +1,11 @@
+--- block/Kconfig.iosched
++++ block/Kconfig.iosched
+@@ -124,7 +135,7 @@
+ 	default "zen" if DEFAULT_ZEN
+ 	default "sio" if DEFAULT_SIO
+ 	default "noop" if DEFAULT_NOOP
+-	
++	default "fiops" if DEFAULT_FIOPS
+ endmenu
+ 
+ endif

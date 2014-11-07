@@ -1,0 +1,82 @@
+--- block/blk-core.c
++++ block/blk-core.c
+@@ -1318,18 +1398,32 @@
+ 	return true;
+ }
+ 
+-/*
+- * Attempts to merge with the plugged list in the current process. Returns
+- * true if merge was successful, otherwise false.
++/**
++ * attempt_plug_merge - try to merge with %current's plugged list
++ * @q: request_queue new bio is being queued at
++ * @bio: new bio being queued
++ * @request_count: out parameter for number of traversed plugged requests
++ *
++ * Determine whether @bio being queued on @q can be merged with a request
++ * on %current's plugged list.  Returns %true if merge was successful,
++ * otherwise %false.
++ *
++ * This function is called without @q->queue_lock; however, elevator is
++ * accessed iff there already are requests on the plugged list which in
++ * turn guarantees validity of the elevator.
++ *
++ * Note that, on successful merge, elevator operation
++ * elevator_bio_merged_fn() will be called without queue lock.  Elevator
++ * must be ready for this.
+  */
+-static bool attempt_plug_merge(struct task_struct *tsk, struct request_queue *q,
+-			       struct bio *bio)
++static bool attempt_plug_merge(struct request_queue *q, struct bio *bio,
++			       unsigned int *request_count)
+ {
+ 	struct blk_plug *plug;
+ 	struct request *rq;
+ 	bool ret = false;
+ 
+-	plug = tsk->plug;
++	plug = current->plug;
+ 	if (!plug)
+ 		goto out;
+ 
+@@ -1374,6 +1467,7 @@
+ 	struct blk_plug *plug;
+ 	int el_ret, rw_flags, where = ELEVATOR_INSERT_SORT;
+ 	struct request *req;
++	unsigned int request_count = 0;
+ 
+ 	/*
+ 	 * low level driver can indicate that it wants pages above a
+@@ -1392,7 +1486,7 @@
+ 	 * Check if we can merge with the plugged list before grabbing
+ 	 * any locks.
+ 	 */
+-	if (attempt_plug_merge(current, q, bio))
++	if (attempt_plug_merge(q, bio, &request_count))
+ 		goto out;
+ 
+ 	spin_lock_irq(q->queue_lock);
+@@ -1440,11 +1538,8 @@
+ 	 */
+ 	init_request_from_bio(req, bio);
+ 
+-	if (test_bit(QUEUE_FLAG_SAME_COMP, &q->queue_flags) ||
+-	    bio_flagged(bio, BIO_CPU_AFFINE)) {
+-		req->cpu = blk_cpu_to_group(get_cpu());
+-		put_cpu();
+-	}
++	if (test_bit(QUEUE_FLAG_SAME_COMP, &q->queue_flags))
++		req->cpu = smp_processor_id();
+ 
+ 	plug = current->plug;
+ 	if (plug) {
+@@ -1647,9 +1745,6 @@
+ 			goto end_io;
+ 		}
+ 
+-		if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags)))
+-			goto end_io;
+-
+ 		if (should_fail_request(bio))
+ 			goto end_io;
+ 
