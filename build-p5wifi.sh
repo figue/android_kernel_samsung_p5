@@ -3,9 +3,9 @@ export ARCH=arm
 export KBUILD_BUILD_USER=Figue
 make clean
 make mrproper
-make figue_p5_defconfig
-#cp -v .config_figue3_modem .config
-make savedefconfig
+make figue_p5wifi_defconfig
+#cp -v .config_figue3 .config
+make menuconfig
 make -j5
 find . -name "*.ko" -exec cp {} ../kernel/system/lib/modules \;
 abootimg -u ../kernel/boot.img -k arch/arm/boot/zImage
