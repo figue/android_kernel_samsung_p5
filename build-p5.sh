@@ -8,7 +8,5 @@ make figue_p5_defconfig
 make menuconfig
 make -j5
 find . -name "*.ko" -exec cp {} ../kernel/system/lib/modules \;
+abootimg -u ../kernel/boot.img -k arch/arm/boot/zImage
 cp -v arch/arm/boot/zImage ../kernel
-cp -v ../boot.img .
-abootimg -u boot.img -k arch/arm/boot/zImage
-cp -v boot.img ../kernel/
