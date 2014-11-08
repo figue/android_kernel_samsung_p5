@@ -5,7 +5,7 @@ make clean
 make mrproper
 make figue_p5_defconfig
 #cp -v .config_figue3_modem .config
-make savedefconfig
+make menuconfig
 make -j5
 find . -name "*.ko" -exec cp {} ../kernel/system/lib/modules \;
 abootimg -u ../kernel/boot.img -k arch/arm/boot/zImage
