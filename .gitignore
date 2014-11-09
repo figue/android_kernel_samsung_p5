@@ -31,7 +31,6 @@
 *.gcno
 *.str.tmp
 modules.builtin
-scripts/
 
 #
 # Top-level generic files
