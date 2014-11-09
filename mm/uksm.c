@@ -798,12 +798,13 @@ static void remove_node_from_stable_tree(struct stable_node *stable_node,
 {
 	struct node_vma *node_vma;
 	struct rmap_item *rmap_item;
-	struct hlist_node *n;
+	struct hlist_node *hlist, *rmap_hlist, *n;
 
 	if (!hlist_empty(&stable_node->hlist)) {
-		hlist_for_each_entry_safe(node_vma, n,
+		hlist_for_each_entry_safe(node_vma, hlist, n,
 					  &stable_node->hlist, hlist) {
-			hlist_for_each_entry(rmap_item, &node_vma->rmap_hlist, hlist) {
+			hlist_for_each_entry(rmap_item, rmap_hlist,
+					     &node_vma->rmap_hlist, hlist) {
 				uksm_pages_sharing--;
 
 				uksm_drop_anon_vma(rmap_item);
@@ -1330,10 +1331,10 @@ static inline u32 page_hash(struct page *page, unsigned long hash_strength,
 	u32 val;
 	unsigned long delta;
 
-	void *addr = kmap_atomic(page);
+	void *addr = kmap_atomic(page, KM_USER0);
 
 	val = random_sample_hash(addr, hash_strength);
-	kunmap_atomic(addr);
+	kunmap_atomic(addr, KM_USER0);
 
 	if (cost_accounting) {
 		if (HASH_STRENGTH_FULL > hash_strength)
@@ -1353,11 +1354,11 @@ static int memcmp_pages(struct page *page1, struct page *page2,
 	char *addr1, *addr2;
 	int ret;
 
-	addr1 = kmap_atomic(page1);
-	addr2 = kmap_atomic(page2);
+	addr1 = kmap_atomic(page1, KM_USER0);
+	addr2 = kmap_atomic(page2, KM_USER1);
 	ret = memcmp(addr1, addr2, PAGE_SIZE);
-	kunmap_atomic(addr2);
-	kunmap_atomic(addr1);
+	kunmap_atomic(addr2, KM_USER1);
+	kunmap_atomic(addr1, KM_USER0);
 
 	if (cost_accounting)
 		inc_rshash_neg(memcmp_cost);
@@ -1375,9 +1376,9 @@ static inline int is_page_full_zero(struct page *page)
 	char *addr;
 	int ret;
 
-	addr = kmap_atomic(page);
+	addr = kmap_atomic(page, KM_USER0);
 	ret = is_full_zero(addr, PAGE_SIZE);
-	kunmap_atomic(addr);
+	kunmap_atomic(addr, KM_USER0);
 
 	return ret;
 }
@@ -1391,22 +1392,15 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 	spinlock_t *ptl;
 	int swapped;
 	int err = -EFAULT;
-	unsigned long mmun_start;	/* For mmu_notifiers */
-	unsigned long mmun_end;		/* For mmu_notifiers */
 
 	addr = page_address_in_vma(page, vma);
 	if (addr == -EFAULT)
 		goto out;
 
 	BUG_ON(PageTransCompound(page));
-
-	mmun_start = addr;
-	mmun_end   = addr + PAGE_SIZE;
-	mmu_notifier_invalidate_range_start(mm, mmun_start, mmun_end);
-
 	ptep = page_check_address(page, mm, addr, &ptl, 0);
 	if (!ptep)
-		goto out_mn;
+		goto out;
 
 	if (old_pte)
 		*old_pte = *ptep;
@@ -1444,8 +1438,6 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 
 out_unlock:
 	pte_unmap_unlock(ptep, ptl);
-out_mn:
-	mmu_notifier_invalidate_range_end(mm, mmun_start, mmun_end);
 out:
 	return err;
 }
@@ -1478,8 +1470,6 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 
 	unsigned long addr;
 	int err = MERGE_ERR_PGERR;
-	unsigned long mmun_start;	/* For mmu_notifiers */
-	unsigned long mmun_end;		/* For mmu_notifiers */
 
 	addr = page_address_in_vma(page, vma);
 	if (addr == -EFAULT)
@@ -1498,14 +1488,10 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	if (!pmd_present(*pmd))
 		goto out;
 
-	mmun_start = addr;
-	mmun_end   = addr + PAGE_SIZE;
-	mmu_notifier_invalidate_range_start(mm, mmun_start, mmun_end);
-
 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte_same(*ptep, orig_pte)) {
 		pte_unmap_unlock(ptep, ptl);
-		goto out_mn;
+		goto out;
 	}
 
 	flush_cache_page(vma, addr, pte_pfn(*ptep));
@@ -1530,8 +1516,6 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 
 	pte_unmap_unlock(ptep, ptl);
 	err = 0;
-out_mn:
-	mmu_notifier_invalidate_range_end(mm, mmun_start, mmun_end);
 out:
 	return err;
 }
@@ -1552,11 +1536,11 @@ static inline u32 page_hash_max(struct page *page, u32 hash_old)
 	u32 hash_max = 0;
 	void *addr;
 
-	addr = kmap_atomic(page);
+	addr = kmap_atomic(page, KM_USER0);
 	hash_max = delta_hash(addr, hash_strength,
 			      HASH_STRENGTH_MAX, hash_old);
 
-	kunmap_atomic(addr);
+	kunmap_atomic(addr, KM_USER0);
 
 	if (!hash_max)
 		hash_max = 1;
@@ -2511,7 +2495,8 @@ static void hold_anon_vma(struct rmap_item *rmap_item,
 static void stable_tree_append(struct rmap_item *rmap_item,
 			       struct stable_node *stable_node, int logdedup)
 {
-	struct node_vma *node_vma = NULL, *new_node_vma, *node_vma_cont = NULL;
+	struct node_vma *node_vma = NULL, *new_node_vma;
+	struct hlist_node *hlist = NULL, *cont_p = NULL;
 	unsigned long key = (unsigned long)rmap_item->slot;
 	unsigned long factor = rmap_item->slot->rung->step;
 
@@ -2525,7 +2510,7 @@ static void stable_tree_append(struct rmap_item *rmap_item,
 		uksm_pages_sharing++;
 	}
 
-	hlist_for_each_entry(node_vma, &stable_node->hlist, hlist) {
+	hlist_for_each_entry(node_vma, hlist, &stable_node->hlist, hlist) {
 		if (node_vma->key >= key)
 			break;
 
@@ -2539,10 +2524,10 @@ static void stable_tree_append(struct rmap_item *rmap_item,
 
 	if (node_vma) {
 		if (node_vma->key == key) {
-			node_vma_cont = hlist_entry_safe(node_vma->hlist.next, struct node_vma, hlist);
+			cont_p = hlist->next;
 			goto node_vma_ok;
 		} else if (node_vma->key > key) {
-			node_vma_cont = node_vma;
+			cont_p = hlist;
 		}
 	}
 
@@ -2572,9 +2557,9 @@ node_vma_ok: /* ok, ready to add to the list */
 	hold_anon_vma(rmap_item, rmap_item->slot->vma->anon_vma);
 	if (logdedup) {
 		rmap_item->slot->pages_merged++;
-		if (node_vma_cont) {
-			node_vma = node_vma_cont;
-			hlist_for_each_entry_continue(node_vma, hlist) {
+		if (cont_p) {
+			hlist_for_each_entry_continue(node_vma,
+						      cont_p, hlist) {
 				node_vma->slot->pages_bemerged += factor;
 				if (list_empty(&node_vma->slot->dedup_list))
 					list_add(&node_vma->slot->dedup_list,
@@ -3212,7 +3197,7 @@ static struct rmap_item *get_next_rmap_item(struct vma_slot *slot, u32 *hash)
 	if (slot->flags & UKSM_SLOT_NEED_RERAND) {
 		rand_range = slot->pages - scan_index;
 		BUG_ON(!rand_range);
-		swap_index = scan_index + (prandom_u32() % rand_range);
+		swap_index = scan_index + (random32() % rand_range);
 	}
 
 	if (swap_index != scan_index) {
@@ -3401,7 +3386,7 @@ void reset_current_scan(struct scan_rung *rung, int finished, int step_recalc)
 		BUG_ON(step_need_recalc(rung));
 	}
 
-	slot_iter_index = prandom_u32() % rung->step;
+	slot_iter_index = random32() % rung->step;
 	BUG_ON(!rung->vma_root.rnode);
 	slot = sradix_tree_next(&rung->vma_root, NULL, 0, slot_iter);
 	BUG_ON(!slot);
@@ -3768,11 +3753,11 @@ static inline void stable_tree_delta_hash(u32 prev_hash_strength)
 		if (node->tree_node) {
 			hash = node->tree_node->hash;
 
-			addr = kmap_atomic(node_page);
+			addr = kmap_atomic(node_page, KM_USER0);
 
 			hash = delta_hash(addr, prev_hash_strength,
 					  hash_strength, hash);
-			kunmap_atomic(addr);
+			kunmap_atomic(addr, KM_USER0);
 		} else {
 			/*
 			 *it was not inserted to rbtree due to collision in last
@@ -4651,6 +4636,7 @@ int page_referenced_ksm(struct page *page, struct mem_cgroup *memcg,
 	struct stable_node *stable_node;
 	struct node_vma *node_vma;
 	struct rmap_item *rmap_item;
+	struct hlist_node *hlist, *rmap_hlist;
 	unsigned int mapcount = page_mapcount(page);
 	int referenced = 0;
 	int search_new_forks = 0;
@@ -4665,16 +4651,16 @@ int page_referenced_ksm(struct page *page, struct mem_cgroup *memcg,
 
 
 again:
-	hlist_for_each_entry(node_vma, &stable_node->hlist, hlist) {
-		hlist_for_each_entry(rmap_item, &node_vma->rmap_hlist, hlist) {
+	hlist_for_each_entry(node_vma, hlist, &stable_node->hlist, hlist) {
+		hlist_for_each_entry(rmap_item, rmap_hlist,
+				     &node_vma->rmap_hlist, hlist) {
 			struct anon_vma *anon_vma = rmap_item->anon_vma;
 			struct anon_vma_chain *vmac;
 			struct vm_area_struct *vma;
 
-			anon_vma_lock_read(anon_vma);
-			anon_vma_interval_tree_foreach(vmac, &anon_vma->rb_root,
-						       0, ULONG_MAX) {
-
+			anon_vma_lock(anon_vma);
+			list_for_each_entry(vmac, &anon_vma->head,
+					    same_anon_vma) {
 				vma = vmac->vma;
 				address = get_rmap_addr(rmap_item);
 
@@ -4703,7 +4689,7 @@ again:
 					break;
 			}
 
-			anon_vma_unlock_read(anon_vma);
+			anon_vma_unlock(anon_vma);
 			if (!mapcount)
 				goto out;
 		}
@@ -4718,6 +4704,7 @@ int try_to_unmap_ksm(struct page *page, enum ttu_flags flags)
 {
 	struct stable_node *stable_node;
 	struct node_vma *node_vma;
+	struct hlist_node *hlist, *rmap_hlist;
 	struct rmap_item *rmap_item;
 	int ret = SWAP_AGAIN;
 	int search_new_forks = 0;
@@ -4730,15 +4717,16 @@ int try_to_unmap_ksm(struct page *page, enum ttu_flags flags)
 	if (!stable_node)
 		return SWAP_FAIL;
 again:
-	hlist_for_each_entry(node_vma, &stable_node->hlist, hlist) {
-		hlist_for_each_entry(rmap_item, &node_vma->rmap_hlist, hlist) {
+	hlist_for_each_entry(node_vma, hlist, &stable_node->hlist, hlist) {
+		hlist_for_each_entry(rmap_item, rmap_hlist,
+				     &node_vma->rmap_hlist, hlist) {
 			struct anon_vma *anon_vma = rmap_item->anon_vma;
 			struct anon_vma_chain *vmac;
 			struct vm_area_struct *vma;
 
-			anon_vma_lock_read(anon_vma);
-			anon_vma_interval_tree_foreach(vmac, &anon_vma->rb_root,
-						       0, ULONG_MAX) {
+			anon_vma_lock(anon_vma);
+			list_for_each_entry(vmac, &anon_vma->head,
+					    same_anon_vma) {
 				vma = vmac->vma;
 				address = get_rmap_addr(rmap_item);
 
@@ -4759,11 +4747,11 @@ again:
 				ret = try_to_unmap_one(page, vma,
 						       address, flags);
 				if (ret != SWAP_AGAIN || !page_mapped(page)) {
-					anon_vma_unlock_read(anon_vma);
+					anon_vma_unlock(anon_vma);
 					goto out;
 				}
 			}
-			anon_vma_unlock_read(anon_vma);
+			anon_vma_unlock(anon_vma);
 		}
 	}
 	if (!search_new_forks++)
@@ -4778,6 +4766,7 @@ int rmap_walk_ksm(struct page *page, int (*rmap_one)(struct page *,
 {
 	struct stable_node *stable_node;
 	struct node_vma *node_vma;
+	struct hlist_node *hlist, *rmap_hlist;
 	struct rmap_item *rmap_item;
 	int ret = SWAP_AGAIN;
 	int search_new_forks = 0;
@@ -4790,15 +4779,16 @@ int rmap_walk_ksm(struct page *page, int (*rmap_one)(struct page *,
 	if (!stable_node)
 		return ret;
 again:
-	hlist_for_each_entry(node_vma, &stable_node->hlist, hlist) {
-		hlist_for_each_entry(rmap_item, &node_vma->rmap_hlist, hlist) {
+	hlist_for_each_entry(node_vma, hlist, &stable_node->hlist, hlist) {
+		hlist_for_each_entry(rmap_item, rmap_hlist,
+				     &node_vma->rmap_hlist, hlist) {
 			struct anon_vma *anon_vma = rmap_item->anon_vma;
 			struct anon_vma_chain *vmac;
 			struct vm_area_struct *vma;
 
-			anon_vma_lock_read(anon_vma);
-			anon_vma_interval_tree_foreach(vmac, &anon_vma->rb_root,
-						       0, ULONG_MAX) {
+			anon_vma_lock(anon_vma);
+			list_for_each_entry(vmac, &anon_vma->head,
+					    same_anon_vma) {
 				vma = vmac->vma;
 				address = get_rmap_addr(rmap_item);
 
@@ -4812,11 +4802,11 @@ again:
 
 				ret = rmap_one(page, vma, address, arg);
 				if (ret != SWAP_AGAIN) {
-					anon_vma_unlock_read(anon_vma);
+					anon_vma_unlock(anon_vma);
 					goto out;
 				}
 			}
-			anon_vma_unlock_read(anon_vma);
+			anon_vma_unlock(anon_vma);
 		}
 	}
 	if (!search_new_forks++)
@@ -5379,15 +5369,15 @@ static inline int cal_positive_negative_costs(void)
 	if (!p2)
 		return -ENOMEM;
 
-	addr1 = kmap_atomic(p1);
-	addr2 = kmap_atomic(p2);
-	memset(addr1, prandom_u32(), PAGE_SIZE);
+	addr1 = kmap_atomic(p1, KM_USER0);
+	addr2 = kmap_atomic(p2, KM_USER1);
+	memset(addr1, random32(), PAGE_SIZE);
 	memcpy(addr2, addr1, PAGE_SIZE);
 
 	/* make sure that the two pages differ in last byte */
 	addr2[PAGE_SIZE-1] = ~addr2[PAGE_SIZE-1];
-	kunmap_atomic(addr2);
-	kunmap_atomic(addr1);
+	kunmap_atomic(addr2, KM_USER1);
+	kunmap_atomic(addr1, KM_USER0);
 
 	time_start = jiffies;
 	while (jiffies - time_start < 100) {
@@ -5421,9 +5411,9 @@ static int init_zeropage_hash_table(void)
 	if (!page)
 		return -ENOMEM;
 
-	addr = kmap_atomic(page);
+	addr = kmap_atomic(page, KM_USER0);
 	memset(addr, 0, PAGE_SIZE);
-	kunmap_atomic(addr);
+	kunmap_atomic(addr, KM_USER0);
 
 	zero_hash_table = kmalloc(HASH_STRENGTH_MAX * sizeof(u32),
 		GFP_KERNEL);
@@ -5452,7 +5442,7 @@ static inline int init_random_sampling(void)
 		unsigned long rand_range, swap_index, tmp;
 
 		rand_range = HASH_STRENGTH_FULL - i;
-		swap_index = i + prandom_u32() % rand_range;
+		swap_index = i + random32() % rand_range;
 		tmp = random_nums[i];
 		random_nums[i] =  random_nums[swap_index];
 		random_nums[swap_index] = tmp;
@@ -5539,23 +5529,10 @@ int ksm_madvise(struct vm_area_struct *vma, unsigned long start,
 }
 
 /* Common interface to ksm, actually the same. */
-struct page *ksm_might_need_to_copy(struct page *page,
+struct page *ksm_does_need_to_copy(struct page *page,
 			struct vm_area_struct *vma, unsigned long address)
 {
-	struct anon_vma *anon_vma = page_anon_vma(page);
 	struct page *new_page;
-
-	if (PageKsm(page)) {
-		if (page_stable_node(page))
-			return page;	/* no need to copy it */
-	} else if (!anon_vma) {
-		return page;		/* no need to copy it */
-	} else if (anon_vma->root == vma->anon_vma->root &&
-		 page->index == linear_page_index(vma, address)) {
-		return page;		/* still no need to copy it */
-	}
-	if (!PageUptodate(page))
-		return page;		/* let do_swap_page report the error */
 
 	new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, address);
 	if (new_page) {
@@ -5563,7 +5540,13 @@ struct page *ksm_might_need_to_copy(struct page *page,
 
 		SetPageDirty(new_page);
 		__SetPageUptodate(new_page);
+		SetPageSwapBacked(new_page);
 		__set_page_locked(new_page);
+
+		if (page_evictable(new_page, vma))
+			lru_cache_add_lru(new_page, LRU_ACTIVE_ANON);
+		else
+			add_page_to_unevictable_list(new_page);
 	}
 
 	return new_page;
