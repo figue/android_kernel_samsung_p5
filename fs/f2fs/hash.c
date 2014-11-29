@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2014 XPerience(R) Project
+/*
  * fs/f2fs/hash.c
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.

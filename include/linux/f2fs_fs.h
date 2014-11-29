@@ -3,6 +3,8 @@
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
  *             http://www.samsung.com/
+ * 
+ * Copyright (c) 2014 XPerience(R) Project
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -153,13 +155,6 @@ struct f2fs_extent {
 #define	NODE_DIND_BLOCK		(DEF_ADDRS_PER_INODE + 5)
 
 #define F2FS_INLINE_XATTR	0x01	/* file inline xattr flag */
-#define F2FS_INLINE_DATA	0x02	/* file inline data flag */
-
-#define MAX_INLINE_DATA		(sizeof(__le32) * (DEF_ADDRS_PER_INODE - \
-						F2FS_INLINE_XATTR_ADDRS - 1))
-
-#define INLINE_DATA_OFFSET	(PAGE_CACHE_SIZE - sizeof(struct node_footer) \
-			- sizeof(__le32) * (DEF_ADDRS_PER_INODE + 5 - 1))
 
 struct f2fs_inode {
 	__le16 i_mode;			/* file mode */

@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2014 XPerience(R) Project
+/*
  * fs/f2fs/xattr.c
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
@@ -177,7 +179,7 @@ static int f2fs_initxattrs(struct inode *inode, const struct xattr *xattr_array,
 int f2fs_init_security(struct inode *inode, struct inode *dir,
 				const struct qstr *qstr, struct page *ipage)
 {
-	return security_inode_init_security(inode, dir, qstr,
+	return security_new_inode_init_security(inode, dir, qstr,
 				&f2fs_initxattrs, ipage);
 }
 #endif
@@ -373,7 +375,7 @@ static inline int write_all_xattrs(struct inode *inode, __u32 hsize,
 			alloc_nid_failed(sbi, new_nid);
 			return PTR_ERR(xpage);
 		}
-		f2fs_bug_on(new_nid);
+		BUG_ON(new_nid);
 	} else {
 		struct dnode_of_data dn;
 		set_new_dnode(&dn, inode, NULL, NULL, new_nid);
@@ -521,9 +523,9 @@ static int __f2fs_setxattr(struct inode *inode, int name_index,
 		 */
 		free = MIN_OFFSET(inode) - ((char *)last - (char *)base_addr);
 		if (found)
-			free = free + ENTRY_SIZE(here);
+			free = free - ENTRY_SIZE(here);
 
-		if (unlikely(free < newsize)) {
+		if (free < newsize) {
 			error = -ENOSPC;
 			goto exit;
 		}
@@ -585,13 +587,16 @@ int f2fs_setxattr(struct inode *inode, int name_index, const char *name,
 			const void *value, size_t value_len, struct page *ipage)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(inode->i_sb);
+	int ilock;
 	int err;
 
 	f2fs_balance_fs(sbi);
 
-	f2fs_lock_op(sbi);
+	ilock = mutex_lock_op(sbi);
+
 	err = __f2fs_setxattr(inode, name_index, name, value, value_len, ipage);
-	f2fs_unlock_op(sbi);
+
+	mutex_unlock_op(sbi, ilock);
 
 	return err;
 }

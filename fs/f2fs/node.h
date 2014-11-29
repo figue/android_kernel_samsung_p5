@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2014 XPerience(R) Project
+/*
  * fs/f2fs/node.h
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
@@ -224,13 +226,7 @@ static inline block_t next_blkaddr_of_node(struct page *node_page)
  *    |            `- direct node (5 + N => 5 + 2N - 1)
  *    `- double indirect node (5 + 2N)
  *                 `- indirect node (6 + 2N)
- *                       `- direct node
- *                 ......
- *                 `- indirect node ((6 + 2N) + x(N + 1))
- *                       `- direct node
- *                 ......
- *                 `- indirect node ((6 + 2N) + (N - 1)(N + 1))
- *                       `- direct node
+ *                       `- direct node (x(N + 1))
  */
 static inline bool IS_DNODE(struct page *node_page)
 {

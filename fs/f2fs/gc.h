@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2014 XPerience(R) Project
+/*
  * fs/f2fs/gc.h
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
@@ -20,7 +22,7 @@
 #define LIMIT_FREE_BLOCK	40 /* percentage over invalid + free space */
 
 /* Search max. number of dirty segments to select a victim segment */
-#define DEF_MAX_VICTIM_SEARCH 4096 /* covers 8GB */
+#define MAX_VICTIM_SEARCH	20
 
 struct f2fs_gc_kthread {
 	struct task_struct *f2fs_gc_task;
